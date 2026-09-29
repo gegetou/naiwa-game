@@ -15,7 +15,7 @@ const OBSTACLE_EMOJIS = ['🌵','🚧','🪨','🛢️','🗑️'];
 function createRoom() {
   const id = 'room_' + (nextRoomId++);
   rooms[id] = {
-    players: [null, null],  // 槽 0 和槽 1
+    players: [null, null],
     objects: [],
     speed: 1.2,
     distance: 0,
@@ -36,14 +36,14 @@ function findRoomWithSlot() {
   return createRoom();
 }
 
-function createObject() {
-  const type = Math.random() < 0.65 ? 'obstacle' : 'coin';
-  const emoji = type === 'coin' ? '🪙'
+function createObject(type) {
+  const t = type || (Math.random() < 0.65 ? 'obstacle' : 'coin');
+  const emoji = t === 'coin' ? '🪙'
     : OBSTACLE_EMOJIS[Math.floor(Math.random() * OBSTACLE_EMOJIS.length)];
-  const size = type === 'coin' ? 40 : 64;
+  const size = t === 'coin' ? 40 : 64;
   return {
     id: Math.random().toString(36).slice(2, 10),
-    type, emoji,
+    type: t, emoji,
     lane: Math.floor(Math.random() * 3),
     y: -90, w: size, h: size
   };
@@ -64,21 +64,18 @@ function startLoop(roomId) {
 
     if (r.running) {
       r.speed = Math.min(4, 1.2 + r.distance * 0.008);
-
       r.spawnTimer -= dt;
       r.coinTimer -= dt;
       if (r.spawnTimer <= 0) {
-        r.objects.push(createObject());
+        r.objects.push(createObject('obstacle'));
         r.spawnTimer = Math.max(110, 200 - r.distance * 0.2) + Math.random() * 60;
       }
       if (r.coinTimer <= 0 && Math.random() < 0.3) {
-        r.objects.push({...createObject(), type:'coin', emoji:'🪙', w:40, h:40});
+        r.objects.push(createObject('coin'));
         r.coinTimer = 60 + Math.random() * 60;
       }
-
       r.objects.forEach(o => { o.y += r.speed * dt; });
       r.objects = r.objects.filter(o => o.y < 2000);
-
       r.distance += r.speed * dt * 0.06;
     }
 
@@ -91,14 +88,13 @@ function startLoop(roomId) {
       } : null)
     });
 
-    r.loopHandle = setTimeout(tick, 33);
+    // 同步频率从 33ms 降到 50ms，减轻网络和服务端压力
+    r.loopHandle = setTimeout(tick, 50);
   };
   tick();
 }
 
 io.on('connection', (socket) => {
-  console.log('连接', socket.id);
-
   socket.on('join', () => {
     const roomId = findRoomWithSlot();
     const room = rooms[roomId];
@@ -109,7 +105,6 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     socket.roomId = roomId;
     socket.slot = slot;
-
     socket.emit('joined', { roomId, slot });
 
     const filled = room.players.filter(p => p).length;
@@ -175,15 +170,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('断开', socket.id);
     const roomId = socket.roomId;
     if (roomId && rooms[roomId]) {
       const room = rooms[roomId];
       socket.to(roomId).emit('partner-left');
       for (let i = 0; i < 2; i++) {
-        if (room.players[i] && room.players[i].id === socket.id) {
-          room.players[i] = null;
-        }
+        if (room.players[i] && room.players[i].id === socket.id) room.players[i] = null;
       }
       if (!room.players[0] && !room.players[1]) {
         if (room.loopHandle) clearTimeout(room.loopHandle);
