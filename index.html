@@ -25,18 +25,21 @@
   .lane-line:nth-child(1){ left:33.3%; }
   .lane-line:nth-child(2){ left:66.6%; }
   #world { position:absolute; left:12%; top:0; width:76%; height:100%; pointer-events:none; overflow:hidden; }
-  .obj { position:absolute; line-height:1; text-shadow:0 4px 10px rgba(0,0,0,.6); }
+  .obj { position:absolute; left:0; top:0; line-height:1; text-shadow:0 4px 10px rgba(0,0,0,.6);
+    will-change:transform; }
   .coin-obj { filter:drop-shadow(0 0 10px gold); }
   .player { position:absolute; bottom:10%; width:76px; height:76px; z-index:10;
+    left:0; top:auto;
     filter:drop-shadow(0 8px 14px rgba(0,0,0,.5));
-    transition:left .15s ease;
+    will-change:transform;
+    transition:transform .12s ease;
     animation:runBob 0.4s ease-in-out infinite alternate; }
-  @keyframes runBob { 0% { transform:translateX(-50%) translateY(0); }
-    100% { transform:translateX(-50%) translateY(-6px); } }
+  @keyframes runBob { 0% { transform:translate3d(var(--px),0,0) translateY(0); }
+    100% { transform:translate3d(var(--px),0,0) translateY(-6px); } }
   .player.jump { animation:jumpAnim .45s ease; }
-  @keyframes jumpAnim { 0% { transform:translateX(-50%) scale(1); }
-    40% { transform:translateX(-50%) scale(1.2) translateY(-30px); }
-    100% { transform:translateX(-50%) scale(1); } }
+  @keyframes jumpAnim { 0% { transform:translate3d(var(--px),0,0) scale(1); }
+    40% { transform:translate3d(var(--px),-30px,0) scale(1.2); }
+    100% { transform:translate3d(var(--px),0,0) scale(1); } }
   .tag { position:absolute; top:-22px; left:50%; transform:translateX(-50%);
     font-size:13px; font-weight:800; color:#fff; text-shadow:0 2px 4px rgba(0,0,0,.8); white-space:nowrap; }
   #hud {
@@ -70,7 +73,7 @@
   <div id="road"><div class="lane-line"></div><div class="lane-line"></div></div>
   <div id="world"></div>
 
-  <div id="player1" class="player" style="left:30%;"><div class="tag">🟡</div>
+  <div id="player1" class="player"><div class="tag">🟡</div>
     <svg viewBox="0 0 100 100" width="100%" height="100%">
       <ellipse cx="50" cy="90" rx="30" ry="6" fill="rgba(0,0,0,0.2)"/>
       <ellipse cx="50" cy="55" rx="45" ry="40" fill="url(#g1)"/>
@@ -86,7 +89,7 @@
       </radialGradient></defs>
     </svg>
   </div>
-  <div id="player2" class="player" style="left:70%;"><div class="tag">🔵</div>
+  <div id="player2" class="player"><div class="tag">🔵</div>
     <svg viewBox="0 0 100 100" width="100%" height="100%">
       <ellipse cx="50" cy="90" rx="30" ry="6" fill="rgba(0,0,0,0.2)"/>
       <ellipse cx="50" cy="55" rx="45" ry="40" fill="url(#g2)"/>
@@ -139,7 +142,6 @@
   let mySlot = -1;
   let myLane = 1, myJumping = false;
   let running = false;
-  let lastState = null;
 
   const objEls = {};
   const socket = io();
@@ -148,14 +150,15 @@
   window.addEventListener('resize', resize);
   function laneCenterX(l){ return laneW*l + laneW/2; }
 
-  // 我永远用黄色（slot 0）或蓝色（slot 1）其中一个
   function myEl(){ return mySlot === 0 ? yellowEl : blueEl; }
   function partnerEl(){ return mySlot === 0 ? blueEl : yellowEl; }
 
   function setPlayerPos(el, lane){
     const x = W*0.12 + laneCenterX(lane);
-    el.style.left = x + 'px';
-    el.style.transform = 'translateX(-50%)';
+    // 用 CSS 变量 + transform，交给 GPU 渲染
+    el.style.setProperty('--px', (x - 38) + 'px');
+    el.style.left = '0';
+    el.style.transform = 'translate3d(' + (x - 38) + 'px, 0, 0)';
   }
 
   function renderObjects(objs){
@@ -172,8 +175,8 @@
       }
       el.style.fontSize = o.w + 'px';
       el.style.width = o.w + 'px';
-      el.style.left = (laneCenterX(o.lane) - o.w/2) + 'px';
-      el.style.top = o.y + 'px';
+      // 用 transform 代替 left/top，避免重排
+      el.style.transform = 'translate3d(' + (laneCenterX(o.lane) - o.w/2) + 'px,' + o.y + 'px,0)';
     });
     for(const id in objEls){
       if(!seen[id]){ objEls[id].remove(); delete objEls[id]; }
@@ -191,19 +194,9 @@
     coinOther.innerHTML = otherColor + ' 对方<br>💰 ' + (other?.coins ?? 0);
   }
 
-  function renderPlayers(data){
+  // 关键优化：不覆盖自己的位置，只同步对方的
+  function renderPartner(data){
     if(mySlot < 0) return;
-    // 我自己
-    const me = data.players[mySlot];
-    if(me){
-      // 只有服务器说我的 lane 变了才同步（避免覆盖本地按键的即时反馈）
-      myLane = me.lane;
-      myJumping = me.jumping;
-      setPlayerPos(myEl(), myLane);
-      if(myJumping) myEl().classList.add('jump');
-      else myEl().classList.remove('jump');
-    }
-    // 对方
     const other = data.players[1 - mySlot];
     if(other){
       setPlayerPos(partnerEl(), other.lane);
@@ -238,6 +231,7 @@
     statusEl.textContent = '等待匹配...';
     overlay.classList.remove('hidden');
     overlayMsg.textContent = '等待对方加入...';
+    setPlayerPos(myEl(), myLane);
   });
 
   socket.on('waiting', ()=>{
@@ -253,10 +247,9 @@
   });
 
   socket.on('state', (data)=>{
-    lastState = data;
     renderObjects(data.objects);
     updateHud(data);
-    renderPlayers(data);
+    renderPartner(data);
     checkMyCollision(data.objects);
   });
 
